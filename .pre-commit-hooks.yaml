@@ -1,0 +1,47 @@
+- id: custom-android-script
+  name: Custom Android Pre-Commit
+  entry: hooks/andriod-pre-commit-hook.sh
+  language: script
+  types_or: [java, kotlin]
+
+- id: custom-dot-net-script
+  name: Custom Dot Net Pre-Commit
+  entry: hooks/dot-net-pre-commit-hook.sh
+  language: script
+  types: [c#]
+
+- id: custom-flutter-script
+  name: Custom Flutter Pre-Commit
+  entry: hooks/flutter-pre-commit-hook.sh
+  language: script
+  types: [dart]
+
+- id: custom-ios-script
+  name: Custom iOS Pre-Commit
+  entry: hooks/ios-pre-commit-hook.sh
+  language: script
+  types: [swift]
+
+- id: custom-js-script
+  name: Custom JavaScript Pre-Commit
+  entry: hooks/js-pre-commit-hook.sh
+  language: script
+  types_or: [javascript, jsx, ts, tsx, json, markdown]
+
+- id: custom-php-script
+  name: Custom PHP Pre-Commit
+  entry: hooks/php-pre-commit-hook.sh
+  language: script
+  types: [php]
+
+- id: custom-python-script
+  name: Custom Python Pre-Commit
+  entry: hooks/python-pre-commit-hook.sh
+  language: script
+  types: [python]
+
+- id: custom-ror-script
+  name: Custom Ruby on Rails Pre-Commit
+  entry: hooks/ror-pre-commit-hook.sh
+  language: script
+  types: [ruby]
