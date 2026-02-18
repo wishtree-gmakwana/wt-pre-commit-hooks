@@ -112,24 +112,60 @@ check_pre_commit() {
     if [[ "$INSTALL_PC" =~ ^[Yy]$ ]]; then
         info "Installing pre-commit..."
 
-        PIP_CMD=""
-        if command -v pip3 &>/dev/null; then
-            PIP_CMD="pip3"
-        elif command -v pip &>/dev/null; then
-            PIP_CMD="pip"
+        INSTALL_SUCCESS=false
+
+        if [ "$OS" = "macOS" ]; then
+            # macOS: prefer brew, then pipx, then pip with --user flag
+            if command -v brew &>/dev/null; then
+                info "Using Homebrew to install pre-commit..."
+                brew install pre-commit && INSTALL_SUCCESS=true
+            elif command -v pipx &>/dev/null; then
+                info "Using pipx to install pre-commit..."
+                pipx install pre-commit && INSTALL_SUCCESS=true
+            else
+                info "Trying pip with --user flag..."
+                PIP_CMD=""
+                if command -v pip3 &>/dev/null; then
+                    PIP_CMD="pip3"
+                elif command -v pip &>/dev/null; then
+                    PIP_CMD="pip"
+                fi
+
+                if [ -n "$PIP_CMD" ]; then
+                    $PIP_CMD install --user pre-commit && INSTALL_SUCCESS=true
+                fi
+
+                if ! $INSTALL_SUCCESS; then
+                    error "Could not install pre-commit automatically."
+                    echo ""
+                    echo "  Please install manually using one of these methods:"
+                    echo "    brew install pre-commit        # Recommended"
+                    echo "    brew install pipx && pipx install pre-commit"
+                    exit 1
+                fi
+            fi
         else
-            error "pip is not installed. Cannot install pre-commit automatically."
-            echo ""
-            case "$OS" in
-                Linux)   echo "  sudo apt install python3-pip   # Debian/Ubuntu" ;;
-                macOS)   echo "  $PYTHON_CMD -m ensurepip --upgrade" ;;
-                Windows) echo "  $PYTHON_CMD -m ensurepip --upgrade" ;;
-            esac
-            exit 1
+            # Linux / Windows: use pip directly
+            PIP_CMD=""
+            if command -v pip3 &>/dev/null; then
+                PIP_CMD="pip3"
+            elif command -v pip &>/dev/null; then
+                PIP_CMD="pip"
+            else
+                error "pip is not installed. Cannot install pre-commit automatically."
+                echo ""
+                case "$OS" in
+                    Linux)   echo "  sudo apt install python3-pip   # Debian/Ubuntu"
+                             echo "  sudo yum install python3-pip   # CentOS/RHEL" ;;
+                    Windows) echo "  $PYTHON_CMD -m ensurepip --upgrade" ;;
+                esac
+                exit 1
+            fi
+
+            $PIP_CMD install pre-commit && INSTALL_SUCCESS=true
         fi
 
-        $PIP_CMD install pre-commit
-        if command -v pre-commit &>/dev/null; then
+        if $INSTALL_SUCCESS && command -v pre-commit &>/dev/null; then
             success "pre-commit installed successfully: ${BOLD}$(pre-commit --version 2>&1)${NC}"
         else
             error "pre-commit installation failed. Please install it manually:"
@@ -199,6 +235,7 @@ select_languages() {
     echo -e "  ${CYAN}6)${NC}  PHP                        - CS Fixer, PHPStan, PHPUnit"
     echo -e "  ${CYAN}7)${NC}  Python                     - Black, Flake8, Bandit, pytest"
     echo -e "  ${CYAN}8)${NC}  Ruby on Rails              - RuboCop, Brakeman, RSpec"
+    echo -e "  ${CYAN}9)${NC}  Java                       - Checkstyle, SpotBugs, PMD, tests"
     echo ""
     echo -e "  ${BOLD}You can select multiple languages (comma-separated).${NC}"
     echo -e "  ${BOLD}Example: 5,7 for JavaScript + Python${NC}"
@@ -225,6 +262,7 @@ select_languages() {
             6) SELECTED_HOOKS+=("custom-php-script")       ;;
             7) SELECTED_HOOKS+=("custom-python-script")    ;;
             8) SELECTED_HOOKS+=("custom-ror-script")       ;;
+            9) SELECTED_HOOKS+=("custom-java-script")      ;;
             *) warn "Invalid selection: '$sel' (skipped)"  ;;
         esac
     done
@@ -247,6 +285,7 @@ select_languages() {
             custom-php-script)        echo -e "    - PHP" ;;
             custom-python-script)     echo -e "    - Python" ;;
             custom-ror-script)        echo -e "    - Ruby on Rails" ;;
+            custom-java-script)       echo -e "    - Java" ;;
         esac
     done
     echo ""
@@ -372,6 +411,13 @@ print_requirements() {
                 echo -e "${BOLD}  Ruby on Rails:${NC}"
                 echo "    - Ruby 2.5+ and Bundler"
                 echo "    - Add rubocop, brakeman, bundler-audit, erb_lint to Gemfile"
+                echo ""
+                ;;
+            custom-java-script)
+                echo -e "${BOLD}  Java:${NC}"
+                echo "    - JDK 11+ (17+ recommended)"
+                echo "    - Maven or Gradle build tool"
+                echo "    - Configure Checkstyle, SpotBugs, PMD plugins in pom.xml or build.gradle"
                 echo ""
                 ;;
         esac

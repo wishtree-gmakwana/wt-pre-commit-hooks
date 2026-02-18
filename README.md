@@ -7,6 +7,7 @@ A collection of language-specific [pre-commit](https://pre-commit.com/) hooks fo
 | Language / Framework | Hook ID | File Types |
 |---|---|---|
 | [Android (Java/Kotlin)](#android-javakotlin) | `custom-android-script` | `.java`, `.kotlin` |
+| [Java](#java) | `custom-java-script` | `.java` |
 | [.NET (C#)](#net-c) | `custom-dot-net-script` | `.cs` |
 | [Flutter (Dart)](#flutter-dart) | `custom-flutter-script` | `.dart` |
 | [iOS (Swift)](#ios-swift) | `custom-ios-script` | `.swift` |
@@ -17,7 +18,47 @@ A collection of language-specific [pre-commit](https://pre-commit.com/) hooks fo
 
 ---
 
-## Prerequisites
+## Quick Start (Recommended)
+
+The easiest way to set up pre-commit hooks is using the interactive setup script. It handles everything automatically — detecting your OS, installing pre-commit, letting you pick languages, generating the config, and installing the git hook.
+
+```bash
+bash setup.sh
+```
+
+The setup script will:
+
+1. Detect your operating system (Linux, macOS, or Windows via Git Bash / WSL / MSYS2)
+2. Verify that Git and Python are installed
+3. Install `pre-commit` if it's not already available (via Homebrew, pipx, or pip depending on your OS)
+4. Check for an existing `.pre-commit-config.yaml` and offer to reconfigure
+5. Present an interactive menu to select one or more language hooks
+6. Generate the `.pre-commit-config.yaml` file (backing up any existing config)
+7. Install the pre-commit git hook
+8. Optionally run the hooks against all existing files
+9. Print language-specific tool requirements for your selections
+
+### Supported Languages in Setup Script
+
+| # | Language / Framework | Hook ID |
+|---|---|---|
+| 1 | Android (Java/Kotlin) | `custom-android-script` |
+| 2 | .NET (C#) | `custom-dot-net-script` |
+| 3 | Flutter (Dart) | `custom-flutter-script` |
+| 4 | iOS (Swift) | `custom-ios-script` |
+| 5 | JavaScript / TypeScript | `custom-js-script` |
+| 6 | PHP | `custom-php-script` |
+| 7 | Python | `custom-python-script` |
+| 8 | Ruby on Rails | `custom-ror-script` |
+| 9 | Java | `custom-java-script` |
+
+You can select multiple languages by entering comma-separated numbers (e.g., `5,7` for JavaScript + Python).
+
+---
+
+## Manual Setup
+
+If you prefer to set things up manually:
 
 1. Install [pre-commit](https://pre-commit.com/#install):
 
@@ -74,6 +115,100 @@ repos:
     rev: v1.0.0
     hooks:
       - id: custom-android-script
+```
+
+---
+
+## Java
+
+### What It Does
+
+Runs a comprehensive Java code quality pipeline including compilation, code style enforcement, static analysis, bug detection, and testing. Supports both **Maven** and **Gradle** projects, with automatic detection of the build tool.
+
+### Checks Performed
+
+| Check | Tool | Blocking |
+|---|---|---|
+| Compilation | `mvn compile` / `gradle compileJava` | Yes |
+| Code style enforcement | [Checkstyle](https://checkstyle.org/) | Yes |
+| Bug detection | [SpotBugs](https://spotbugs.github.io/) | Yes |
+| Code analysis | [PMD](https://pmd.github.io/) | Yes |
+| Code formatting | [Spotless](https://github.com/diffplug/spotless) | Yes |
+| Unit tests | `mvn test` / `gradle test` | Yes |
+| Debug statement detection | `grep` (System.out.println, printStackTrace) | Warning only |
+| Hardcoded secrets detection | `grep` (password, apiKey, secret, etc.) | Warning only |
+| TODO/FIXME/HACK comments | `grep` | Info only |
+| Large file detection | Files > 1MB | Warning only |
+| Sensitive config detection | application.properties/yml | Warning only |
+| Spring Boot best practices | @Autowired field injection detection | Info only |
+
+### Requirements
+
+- JDK 11+ (17+ recommended)
+- [Maven](https://maven.apache.org/) or [Gradle](https://gradle.org/) build tool
+
+#### Maven — Add plugins to `pom.xml`:
+
+```xml
+<build>
+  <plugins>
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId>
+      <artifactId>maven-checkstyle-plugin</artifactId>
+      <version>3.3.1</version>
+    </plugin>
+    <plugin>
+      <groupId>com.github.spotbugs</groupId>
+      <artifactId>spotbugs-maven-plugin</artifactId>
+      <version>4.8.3.1</version>
+    </plugin>
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId>
+      <artifactId>maven-pmd-plugin</artifactId>
+      <version>3.21.2</version>
+    </plugin>
+  </plugins>
+</build>
+```
+
+#### Gradle — Add plugins to `build.gradle`:
+
+```groovy
+plugins {
+    id 'checkstyle'
+    id 'pmd'
+    id 'com.github.spotbugs' version '6.0.7'
+}
+```
+
+### How to Fix Failures
+
+```bash
+# Maven
+mvn checkstyle:check          # View Checkstyle violations
+mvn spotbugs:check            # View SpotBugs issues
+mvn pmd:check                 # View PMD issues
+mvn spotless:apply            # Fix formatting (if Spotless configured)
+mvn test                      # Run tests locally
+
+# Gradle
+./gradlew checkstyleMain      # View Checkstyle violations
+./gradlew spotbugsMain        # View SpotBugs issues
+./gradlew pmdMain             # View PMD issues
+./gradlew spotlessApply       # Fix formatting (if Spotless configured)
+./gradlew test                # Run tests locally
+```
+
+### Setup
+
+Copy `.pre-commit-config-java.yaml` to your project root as `.pre-commit-config.yaml`, or add the following:
+
+```yaml
+repos:
+  - repo: https://github.com/wishtree-gmakwana/wt-pre-commit-hooks
+    rev: v1.0.0
+    hooks:
+      - id: custom-java-script
 ```
 
 ---
@@ -473,10 +608,11 @@ SKIP=custom-js-script git commit -m "your message"
 
 | Issue | Solution |
 |---|---|
-| `pre-commit` command not found | Run `pip install pre-commit` |
+| `pre-commit` command not found | Run `pip install pre-commit` or re-run `bash setup.sh` |
 | Hook script permission denied | Run `chmod +x hooks/<script>.sh` |
 | Hook fails on first run | Ensure all required tools for your language are installed (see language-specific Requirements sections) |
 | Hook runs on wrong files | Verify `types` or `types_or` in `.pre-commit-hooks.yaml` match your file types |
+| Setup script fails | Ensure you are running from within a git repository with `bash` available |
 
 ---
 

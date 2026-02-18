@@ -5,6 +5,13 @@
   pass_filenames: true
   types_or: [java, kotlin]
 
+- id: custom-java-script
+  name: Custom Java Pre-Commit
+  entry: bash hooks/java-pre-commit-hook.sh
+  language: system
+  pass_filenames: true
+  types: [java]
+
 - id: custom-dot-net-script
   name: Custom Dot Net Pre-Commit
   entry: bash hooks/dot-net-pre-commit-hook.sh
