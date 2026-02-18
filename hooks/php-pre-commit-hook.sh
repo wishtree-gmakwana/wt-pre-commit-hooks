@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # PHP Pre-commit Hook
 # This script runs PHP code quality checks before each commit

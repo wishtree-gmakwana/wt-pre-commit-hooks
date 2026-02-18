@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # .NET Pre-commit Hook
 # This script runs .NET code quality checks before each commit

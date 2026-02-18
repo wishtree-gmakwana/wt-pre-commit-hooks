@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Ruby on Rails Pre-commit Hook
 # This script runs Rails code quality checks before each commit

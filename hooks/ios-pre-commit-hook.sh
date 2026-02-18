@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Define the tools to be run
 LINT_TOOL="swiftlint"

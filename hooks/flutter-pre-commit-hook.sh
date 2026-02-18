@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Flutter Pre-commit Hook
 # This script runs Flutter code quality checks before each commit
