@@ -346,12 +346,18 @@ if [ -n "$STAGED_PY_FILES" ]; then
     echo -e "${BOLD}  Code Formatting (Black)${RESET}"
     separator
 
-    if command -v black &>/dev/null || $PYTHON_CMD -m black --version &>/dev/null 2>&1; then
+    if $PYTHON_CMD -m black --version &>/dev/null 2>&1; then
+        BLACK_CMD="$PYTHON_CMD -m black"
+    elif command -v black &>/dev/null; then
         BLACK_CMD="black"
-        $PYTHON_CMD -m black --version &>/dev/null 2>&1 && BLACK_CMD="$PYTHON_CMD -m black"
+    else
+        BLACK_CMD=""
+    fi
 
+    if [ -n "$BLACK_CMD" ]; then
         info "Running Black formatter..."
-        BLACK_OUT=$(echo "$STAGED_PY_FILES" | tr '\n' ' ' | xargs $BLACK_CMD --quiet 2>&1) || {
+        mapfile -t _PY_FILES <<< "$STAGED_PY_FILES"
+        BLACK_OUT=$($BLACK_CMD --quiet "${_PY_FILES[@]}" 2>&1) || {
             error "Black formatting failed:"
             echo "$BLACK_OUT" >&2
             fatal "Fix Black errors before committing."
@@ -371,14 +377,20 @@ if [ -n "$STAGED_PY_FILES" ]; then
     echo -e "${BOLD}  Import Sorting (isort)${RESET}"
     separator
 
-    if command -v isort &>/dev/null || $PYTHON_CMD -m isort --version &>/dev/null 2>&1; then
+    if $PYTHON_CMD -m isort --version &>/dev/null 2>&1; then
+        ISORT_CMD="$PYTHON_CMD -m isort"
+    elif command -v isort &>/dev/null; then
         ISORT_CMD="isort"
-        $PYTHON_CMD -m isort --version &>/dev/null 2>&1 && ISORT_CMD="$PYTHON_CMD -m isort"
+    else
+        ISORT_CMD=""
+    fi
 
+    if [ -n "$ISORT_CMD" ]; then
         info "Running isort..."
         ISORT_PROFILE="--profile black"
         [ -f "pyproject.toml" ] && grep -q "\[tool.isort\]" pyproject.toml && ISORT_PROFILE=""
-        ISORT_OUT=$(echo "$STAGED_PY_FILES" | tr '\n' ' ' | xargs $ISORT_CMD $ISORT_PROFILE --quiet 2>&1) || {
+        mapfile -t _PY_FILES <<< "$STAGED_PY_FILES"
+        ISORT_OUT=$($ISORT_CMD $ISORT_PROFILE --quiet "${_PY_FILES[@]}" 2>&1) || {
             error "isort failed:"; echo "$ISORT_OUT" >&2
             fatal "Fix isort errors before committing."
         }
@@ -397,15 +409,21 @@ if [ -n "$STAGED_PY_FILES" ]; then
     echo -e "${BOLD}  Linting (Flake8)${RESET}"
     separator
 
-    if command -v flake8 &>/dev/null || $PYTHON_CMD -m flake8 --version &>/dev/null 2>&1; then
+    if $PYTHON_CMD -m flake8 --version &>/dev/null 2>&1; then
+        FLAKE8_CMD="$PYTHON_CMD -m flake8"
+    elif command -v flake8 &>/dev/null; then
         FLAKE8_CMD="flake8"
-        $PYTHON_CMD -m flake8 --version &>/dev/null 2>&1 && FLAKE8_CMD="$PYTHON_CMD -m flake8"
+    else
+        FLAKE8_CMD=""
+    fi
 
+    if [ -n "$FLAKE8_CMD" ]; then
         info "Running Flake8..."
         FLAKE8_ARGS="--max-line-length=120"
         [ -f ".flake8" ] || grep -q "\[flake8\]" setup.cfg 2>/dev/null || grep -q "\[tool.flake8\]" pyproject.toml 2>/dev/null && FLAKE8_ARGS=""
 
-        FLAKE8_OUT=$(echo "$STAGED_PY_FILES" | tr '\n' ' ' | xargs $FLAKE8_CMD $FLAKE8_ARGS 2>&1) || {
+        mapfile -t _PY_FILES <<< "$STAGED_PY_FILES"
+        FLAKE8_OUT=$($FLAKE8_CMD $FLAKE8_ARGS "${_PY_FILES[@]}" 2>&1) || {
             error "Flake8 found issues:"
             echo "$FLAKE8_OUT" >&2
             fatal "Fix Flake8 errors before committing."

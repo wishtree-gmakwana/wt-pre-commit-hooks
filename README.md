@@ -18,6 +18,21 @@ A collection of language-specific [pre-commit](https://pre-commit.com/) hooks fo
 
 ---
 
+## Prerequisites
+
+Before setting up any hook, ensure the following are installed on your system:
+
+| Requirement | Why | Install |
+|---|---|---|
+| [Git](https://git-scm.com/) | Required for all hooks | `sudo apt install git` / `brew install git` / [git-scm.com](https://git-scm.com/download/win) |
+| [Python 3.x](https://www.python.org/) | Required to install and run `pre-commit` | `sudo apt install python3` / `brew install python3` / [python.org](https://www.python.org/downloads/) |
+| [pip](https://pip.pypa.io/) | Required to install `pre-commit` | `sudo apt install python3-pip` / included with Python 3.4+ |
+| [pre-commit](https://pre-commit.com/) | The framework that runs these hooks | `pip install pre-commit` |
+
+Language-specific tools (Black, ESLint, PHPStan, etc.) are listed in each language's **Requirements** section below.
+
+---
+
 ## Quick Start (Recommended)
 
 The easiest way to set up pre-commit hooks is using the interactive setup script. It handles everything automatically — detecting your OS, installing pre-commit, letting you pick languages, generating the config, and installing the git hook.
@@ -604,6 +619,37 @@ SKIP=custom-js-script git commit -m "your message"
 
 ---
 
+## Updating Hooks
+
+When new versions of `wt-pre-commit-hooks` are released, run the following commands inside your project to pull in the latest scripts:
+
+```bash
+# Step 1 — Update the rev: tag in .pre-commit-config.yaml to the latest release
+pre-commit autoupdate
+
+# Step 2 — Clear the cached hook environments (forces re-download of updated scripts)
+pre-commit clean
+
+# Step 3 — Reinstall the hook into .git/hooks/
+pre-commit install
+
+# Step 4 — (Optional) Validate the update by running hooks on all files
+pre-commit run --all-files
+```
+
+### What each command does
+
+| Command | Purpose |
+|---|---|
+| `pre-commit autoupdate` | Updates the `rev:` value in `.pre-commit-config.yaml` to the latest tagged release |
+| `pre-commit clean` | Removes the local hook cache so updated scripts are downloaded fresh |
+| `pre-commit install` | Reinstalls the git hook entry point into `.git/hooks/pre-commit` |
+| `pre-commit run --all-files` | Runs all hooks against every file — useful to verify the update works |
+
+> **Note:** `pre-commit autoupdate` requires a tagged release on GitHub. If you are pinned to a specific `rev:`, update it manually to the desired tag before running `pre-commit clean && pre-commit install`.
+
+---
+
 ## Troubleshooting
 
 | Issue | Solution |
@@ -613,6 +659,9 @@ SKIP=custom-js-script git commit -m "your message"
 | Hook fails on first run | Ensure all required tools for your language are installed (see language-specific Requirements sections) |
 | Hook runs on wrong files | Verify `types` or `types_or` in `.pre-commit-hooks.yaml` match your file types |
 | Setup script fails | Ensure you are running from within a git repository with `bash` available |
+| Hook not updated after new release | Run `pre-commit autoupdate && pre-commit clean && pre-commit install` |
+| `autoupdate` keeps old version | Ensure the new version is tagged and pushed on GitHub (`git tag vX.Y.Z && git push origin vX.Y.Z`) |
+| Changes not picked up after edit | Run `pre-commit clean && pre-commit install` to bust the local hook cache |
 
 ---
 
