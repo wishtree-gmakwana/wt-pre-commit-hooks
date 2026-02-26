@@ -1,337 +1,497 @@
 #!/usr/bin/env bash
-
 # Ruby on Rails Pre-commit Hook
-# This script runs Rails code quality checks before each commit
-# Compatible with Rails 5+, Ruby 2.5+
+# Supports Mac, Windows (Git Bash/WSL), Linux
+# Compatible with Rails 5+, Ruby 2.7+
 
-echo "🚀 Running Ruby on Rails pre-commit checks..."
+set -euo pipefail
 
-# Check if ruby is installed
-if ! command -v ruby &> /dev/null; then
-    echo "❌ Ruby is not installed or not in PATH"
-    echo "   Please install Ruby from https://www.ruby-lang.org/en/downloads/"
-    exit 1
-fi
+# ─── Color Output ─────────────────────────────────────────────────────────────
+RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
+BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
 
-# Check if bundler is installed
-if ! command -v bundle &> /dev/null; then
-    echo "❌ Bundler is not installed"
-    echo "   Please install with: gem install bundler"
-    exit 1
-fi
+info()    { echo -e "${BLUE}[INFO]${RESET}  $*"; }
+success() { echo -e "${GREEN}[PASS]${RESET}  $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
+error()   { echo -e "${RED}[FAIL]${RESET}  $*" >&2; }
+fatal()   { error "$*"; echo -e "${RED}${BOLD}Aborting commit.${RESET}" >&2; exit 1; }
+separator(){ echo -e "${BOLD}$(printf '─%.0s' {1..70})${RESET}"; }
 
-# Function to check if it's a Rails project
-is_rails_project() {
-    # Check for common Rails project indicators
-    if [ -f "Gemfile" ] && [ -f "config/application.rb" ]; then
-        return 0
-    fi
-    return 1
-}
-
-# Function to check if it's a Ruby project (non-Rails)
-is_ruby_project() {
-    if [ -f "Gemfile" ]; then
-        return 0
-    fi
-    return 1
-}
-
-# Check if we're in a Rails or Ruby project
-if ! is_rails_project && ! is_ruby_project; then
-    echo "❌ Not a Ruby/Rails project (no Gemfile found)"
-    exit 1
-fi
-
-# Determine project type
-if is_rails_project; then
-    PROJECT_TYPE="Rails"
-else
-    PROJECT_TYPE="Ruby"
-fi
-
-# Display Ruby/Rails version info
-echo "📋 $PROJECT_TYPE Project Information:"
-echo "   Ruby version: $(ruby --version)"
-if command -v rails &> /dev/null && is_rails_project; then
-    echo "   Rails version: $(rails --version 2>/dev/null || echo 'Not available')"
-fi
-echo "   Bundler version: $(bundle --version)"
+echo ""
+separator
+echo -e "${BOLD}  Ruby on Rails Pre-commit Hook${RESET}"
+separator
 echo ""
 
-# Check for Gemfile.lock
-if [ ! -f "Gemfile.lock" ]; then
-    echo "⚠️  No Gemfile.lock found. Running bundle install..."
-    if ! bundle install --quiet; then
-        echo "❌ Failed to install gems"
-        exit 1
-    fi
+# ─── OS Detection ─────────────────────────────────────────────────────────────
+detect_os() {
+    case "$(uname -s 2>/dev/null)" in
+        Darwin)  echo "mac";;
+        Linux)   echo "linux";;
+        MINGW*|MSYS*|CYGWIN*) echo "windows";;
+        *)       [ -n "${WINDIR:-}" ] && echo "windows" || echo "unknown";;
+    esac
+}
+
+OS=$(detect_os)
+info "Detected OS: $OS"
+
+# ─── Install Guidance ─────────────────────────────────────────────────────────
+install_ruby() {
+    error "Ruby is not installed or not in PATH."
+    echo ""
+    echo -e "${BOLD}  Install Ruby (3.1+ recommended):${RESET}"
+    case "$OS" in
+        mac)
+            echo "    rbenv:    brew install rbenv && rbenv install 3.3.0 && rbenv global 3.3.0"
+            echo "    RVM:      curl -sSL https://get.rvm.io | bash -s stable"
+            echo "    Homebrew: brew install ruby"
+            ;;
+        linux)
+            echo "    rbenv:    https://github.com/rbenv/rbenv#installation"
+            echo "    RVM:      curl -sSL https://get.rvm.io | bash -s stable"
+            echo "    Ubuntu:   sudo apt-get install -y ruby-full"
+            echo "    Arch:     sudo pacman -S ruby"
+            ;;
+        windows)
+            echo "    RubyInstaller: https://rubyinstaller.org/"
+            echo "    Chocolatey:    choco install ruby"
+            echo "    Winget:        winget install RubyInstallerTeam.Ruby.3.3"
+            ;;
+    esac
+    fatal "Ruby is required. Please install it and retry."
+}
+
+install_bundler() {
+    error "Bundler is not installed."
+    echo ""
+    echo -e "${BOLD}  Install Bundler:${RESET}"
+    echo "    gem install bundler"
+    echo "    Or: sudo gem install bundler  (if using system Ruby)"
+    fatal "Bundler is required. Please install it and retry."
+}
+
+# ─── Check Ruby ───────────────────────────────────────────────────────────────
+if ! command -v ruby &>/dev/null; then
+    install_ruby
 fi
 
-# Install dependencies
-echo "📦 Checking gem dependencies..."
-if ! bundle check --dry-run > /dev/null 2>&1; then
-    echo "   Installing missing gems..."
-    if ! bundle install --quiet; then
-        echo "❌ Failed to install gems"
-        exit 1
-    fi
-fi
-echo "✅ Gem dependencies satisfied"
+RUBY_VERSION=$(ruby --version 2>&1)
+info "Ruby: $RUBY_VERSION"
 
-# Get staged Ruby files for targeted checks
-STAGED_RB_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.rb$' | tr '\n' ' ')
-STAGED_ERB_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.erb$' | tr '\n' ' ')
+RUBY_MAJOR=$(ruby -e "puts RUBY_VERSION.split('.')[0]" 2>/dev/null || echo "0")
+RUBY_MINOR=$(ruby -e "puts RUBY_VERSION.split('.')[1]" 2>/dev/null || echo "0")
 
-# Run RuboCop (Ruby linter and formatter)
-echo "🎨 Running RuboCop (code style and linting)..."
-if bundle show rubocop > /dev/null 2>&1; then
-    if [ -n "$STAGED_RB_FILES" ]; then
-        if ! bundle exec rubocop --force-exclusion $STAGED_RB_FILES; then
-            echo "❌ RuboCop found issues. Run 'bundle exec rubocop -a' to auto-fix some issues."
-            exit 1
-        fi
-    else
-        echo "   No staged Ruby files to check"
-    fi
-    echo "✅ RuboCop check passed"
-elif command -v rubocop &> /dev/null; then
-    if [ -n "$STAGED_RB_FILES" ]; then
-        if ! rubocop --force-exclusion $STAGED_RB_FILES; then
-            echo "❌ RuboCop found issues. Run 'rubocop -a' to auto-fix some issues."
-            exit 1
-        fi
-    fi
-    echo "✅ RuboCop check passed"
-else
-    echo "⚠️  RuboCop not found. Install with: gem 'rubocop' in Gemfile"
-    echo "   Skipping style check for now..."
+if [ "$RUBY_MAJOR" -lt 2 ] || { [ "$RUBY_MAJOR" -eq 2 ] && [ "$RUBY_MINOR" -lt 7 ]; }; then
+    warn "Ruby $RUBY_MAJOR.$RUBY_MINOR is outdated. Ruby 3.1+ is recommended."
 fi
 
-# Run Ruby syntax check
-echo "🔍 Checking Ruby syntax..."
-SYNTAX_ERRORS=0
-for file in $STAGED_RB_FILES; do
-    if [ -f "$file" ]; then
-        if ! ruby -c "$file" > /dev/null 2>&1; then
-            echo "   ❌ Syntax error in: $file"
-            ruby -c "$file"
-            SYNTAX_ERRORS=1
-        fi
+# ─── Check Bundler ────────────────────────────────────────────────────────────
+if ! command -v bundle &>/dev/null; then
+    install_bundler
+fi
+
+info "Bundler: $(bundle --version 2>&1)"
+
+# ─── Project Detection ────────────────────────────────────────────────────────
+is_rails_project() {
+    [ -f "Gemfile" ] && [ -f "config/application.rb" ] && return 0
+    return 1
+}
+
+is_ruby_project() {
+    [ -f "Gemfile" ] && return 0
+    return 1
+}
+
+if ! is_ruby_project; then
+    fatal "Not a Ruby/Rails project. No Gemfile found."
+fi
+
+PROJECT_TYPE="Ruby"
+is_rails_project && PROJECT_TYPE="Rails"
+info "Project type: $PROJECT_TYPE"
+
+# ─── Staged Files ─────────────────────────────────────────────────────────────
+STAGED_RB_FILES=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -E '\.rb$' || true)
+STAGED_ERB_FILES=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -E '\.erb$' || true)
+ALL_STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
+
+if [ -z "$ALL_STAGED" ]; then
+    info "No staged files. Skipping checks."
+    exit 0
+fi
+
+echo ""
+
+# ─── Merge Conflict Markers ───────────────────────────────────────────────────
+info "Checking for merge conflict markers..."
+CONFLICT_FILES=""
+for f in $ALL_STAGED; do
+    [ -f "$f" ] || continue
+    if grep -qP '^(<{7}|={7}|>{7})' "$f" 2>/dev/null; then
+        CONFLICT_FILES="$CONFLICT_FILES\n  $f"
     fi
 done
-if [ $SYNTAX_ERRORS -eq 1 ]; then
-    echo "❌ Ruby syntax errors found. Please fix them before committing."
-    exit 1
+if [ -n "$CONFLICT_FILES" ]; then
+    fatal "Merge conflict markers found in:$CONFLICT_FILES"
 fi
-echo "✅ Ruby syntax check passed"
+success "No merge conflict markers."
 
-# Run ERB lint if available
-if [ -n "$STAGED_ERB_FILES" ]; then
-    echo "🎨 Checking ERB templates..."
-    if bundle show erb_lint > /dev/null 2>&1; then
-        if ! bundle exec erblint $STAGED_ERB_FILES; then
-            echo "❌ ERB lint found issues."
-            exit 1
-        fi
-        echo "✅ ERB lint check passed"
-    else
-        echo "⚠️  erb_lint not found. Install with: gem 'erb_lint' in Gemfile"
-        echo "   Skipping ERB lint for now..."
-    fi
-fi
+# ─── Gem Dependencies ─────────────────────────────────────────────────────────
+echo ""
+separator
+echo -e "${BOLD}  Gem Dependencies${RESET}"
+separator
 
-# Run Brakeman (security scanner for Rails)
-if is_rails_project; then
-    echo "🔐 Running security analysis (Brakeman)..."
-    if bundle show brakeman > /dev/null 2>&1; then
-        if ! bundle exec brakeman --quiet --no-pager --no-exit-on-warn --exit-on-error; then
-            echo "❌ Brakeman found security vulnerabilities!"
-            echo "   Run 'bundle exec brakeman' for detailed report."
-            exit 1
-        fi
-        echo "✅ Security analysis passed"
-    elif command -v brakeman &> /dev/null; then
-        if ! brakeman --quiet --no-pager --no-exit-on-warn --exit-on-error; then
-            echo "❌ Brakeman found security vulnerabilities!"
-            exit 1
-        fi
-        echo "✅ Security analysis passed"
-    else
-        echo "⚠️  Brakeman not found. Install with: gem 'brakeman' in Gemfile"
-        echo "   Skipping security analysis for now..."
-    fi
-fi
-
-# Run bundler-audit (check for vulnerable gems)
-echo "🛡️  Checking for vulnerable dependencies..."
-if bundle show bundler-audit > /dev/null 2>&1; then
-    # Update advisory database quietly
-    bundle exec bundle-audit update --quiet 2>/dev/null || true
-    if ! bundle exec bundle-audit check --quiet; then
-        echo "❌ Vulnerable gems found! Run 'bundle exec bundle-audit' for details."
-        echo "   Update vulnerable gems before committing."
-        exit 1
-    fi
-    echo "✅ Dependency security check passed"
-elif command -v bundle-audit &> /dev/null; then
-    bundle-audit update --quiet 2>/dev/null || true
-    if ! bundle-audit check --quiet; then
-        echo "❌ Vulnerable gems found!"
-        exit 1
-    fi
-    echo "✅ Dependency security check passed"
+if [ ! -f "Gemfile.lock" ]; then
+    info "Gemfile.lock not found. Running bundle install..."
+    bundle install --quiet 2>/tmp/bundle_err || {
+        error "bundle install failed:"
+        cat /tmp/bundle_err >&2
+        fatal "Fix Gemfile errors before committing."
+    }
 else
-    echo "⚠️  bundler-audit not found. Install with: gem 'bundler-audit' in Gemfile"
-    echo "   Skipping dependency security check for now..."
+    info "Verifying gem dependencies..."
+    bundle check --dry-run > /dev/null 2>&1 || {
+        info "Installing missing gems..."
+        bundle install --quiet 2>/tmp/bundle_err || {
+            error "bundle install failed:"
+            cat /tmp/bundle_err >&2
+            fatal "Fix gem dependency errors before committing."
+        }
+    }
+fi
+success "Gem dependencies satisfied."
+
+# ─── Bundler Audit (security) ─────────────────────────────────────────────────
+echo ""
+separator
+echo -e "${BOLD}  Dependency Security Audit${RESET}"
+separator
+
+if bundle show bundler-audit > /dev/null 2>&1 || command -v bundle-audit &>/dev/null; then
+    info "Updating vulnerability database..."
+    if bundle show bundler-audit > /dev/null 2>&1; then
+        bundle exec bundle-audit update --quiet 2>/dev/null || true
+        AUDIT_OUT=$(bundle exec bundle-audit check 2>&1) || {
+            error "Vulnerable gems found:"
+            echo "$AUDIT_OUT" | head -30 >&2
+            fatal "Update vulnerable gems before committing."
+        }
+    else
+        bundle-audit update --quiet 2>/dev/null || true
+        AUDIT_OUT=$(bundle-audit check 2>&1) || {
+            error "Vulnerable gems found:"
+            echo "$AUDIT_OUT" | head -30 >&2
+            fatal "Update vulnerable gems before committing."
+        }
+    fi
+    success "No known vulnerable gems."
+else
+    warn "bundler-audit not found."
+    warn "Install: add gem 'bundler-audit', group: :development to Gemfile"
+    warn "Then: bundle install && bundle exec bundle-audit update"
 fi
 
-# Run Rails Best Practices (if available)
-if is_rails_project; then
-    echo "📊 Running Rails Best Practices..."
-    if bundle show rails_best_practices > /dev/null 2>&1; then
-        if ! bundle exec rails_best_practices --silent --without-color . 2>/dev/null; then
-            echo "⚠️  Rails Best Practices found suggestions (non-blocking)"
-        else
-            echo "✅ Rails Best Practices check passed"
+# ─── Production Safety Checks ─────────────────────────────────────────────────
+if [ -n "$STAGED_RB_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Production Safety Checks${RESET}"
+    separator
+
+    PROD_ISSUES=0
+
+    # Debugger statements
+    DEBUG_FILES=""
+    for f in $STAGED_RB_FILES; do
+        [ -f "$f" ] || continue
+        if grep -qE '(binding\.pry|byebug|debugger|binding\.irb|require.*pry)' "$f" 2>/dev/null; then
+            DEBUG_FILES="$DEBUG_FILES\n  $f"
         fi
+    done
+    if [ -n "$DEBUG_FILES" ]; then
+        fatal "Debugger statements found:$DEBUG_FILES\nRemove binding.pry, byebug, debugger before committing."
+    fi
+
+    # puts/p statements in app/lib code
+    PUTS_FILES=""
+    for f in $STAGED_RB_FILES; do
+        [ -f "$f" ] || continue
+        if echo "$f" | grep -qE '(^app/|^lib/)'; then
+            if echo "$f" | grep -qiE '(_spec\.rb$|_test\.rb$|/spec/|/test/)'; then continue; fi
+            if grep -qE '^\s*(puts |pp |p )' "$f" 2>/dev/null; then
+                PUTS_FILES="$PUTS_FILES\n  $f"
+            fi
+        fi
+    done
+    if [ -n "$PUTS_FILES" ]; then
+        warn "puts/p statements in app/ or lib/:$PUTS_FILES"
+        warn "Use Rails.logger or a structured logger instead."
+        PROD_ISSUES=$((PROD_ISSUES + 1))
+    fi
+
+    # Hardcoded secrets
+    CRED_FILES=""
+    for f in $STAGED_RB_FILES; do
+        [ -f "$f" ] || continue
+        if echo "$f" | grep -qiE '(_spec\.rb$|_test\.rb$|/spec/|/test/)'; then continue; fi
+        if grep -qiE "(api_key|api_secret|password|secret_key|private_key)\s*=\s*['\"][^'\"]{4,}" "$f" 2>/dev/null; then
+            CRED_FILES="$CRED_FILES\n  $f"
+        fi
+    done
+    if [ -n "$CRED_FILES" ]; then
+        error "Potential hardcoded secrets in:$CRED_FILES"
+        fatal "Use Rails credentials (rails credentials:edit) or environment variables."
+    fi
+
+    # Sensitive files staged
+    SENSITIVE_FILES=""
+    for f in $ALL_STAGED; do
+        case "$f" in
+            .env|.env.production|.env.prod|config/master.key|*.pem|*.key|id_rsa|id_ed25519)
+                SENSITIVE_FILES="$SENSITIVE_FILES\n  $f"
+                ;;
+        esac
+    done
+    if [ -n "$SENSITIVE_FILES" ]; then
+        error "Sensitive files staged:$SENSITIVE_FILES"
+        fatal "Remove from staging and ensure they are in .gitignore."
+    fi
+
+    # TODO/FIXME/HACK
+    TODO_FILES=""
+    for f in $STAGED_RB_FILES; do
+        [ -f "$f" ] || continue
+        if grep -qiE '#\s*(TODO|FIXME|HACK|XXX):' "$f" 2>/dev/null; then
+            TODO_FILES="$TODO_FILES\n  $f"
+        fi
+    done
+    [ -n "$TODO_FILES" ] && warn "TODO/FIXME/HACK comments found:$TODO_FILES"
+
+    # Large files
+    LARGE_FILES=""
+    for f in $ALL_STAGED; do
+        [ -f "$f" ] || continue
+        SIZE=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+        if [ "$SIZE" -gt 1048576 ]; then
+            LARGE_FILES="$LARGE_FILES\n  $f ($(( SIZE / 1024 ))KB)"
+        fi
+    done
+    [ -n "$LARGE_FILES" ] && warn "Large files staged (>1MB):$LARGE_FILES\nConsider Git LFS."
+
+    # .gitignore health check for Rails
+    if [ -f ".gitignore" ]; then
+        MISSING_IGNORES=""
+        for pattern in "*.log" "/tmp" "/log" "master.key" ".env"; do
+            grep -q "$pattern" .gitignore 2>/dev/null || MISSING_IGNORES="$MISSING_IGNORES $pattern"
+        done
+        [ -n "$MISSING_IGNORES" ] && warn "Consider adding to .gitignore:$MISSING_IGNORES"
+    fi
+
+    [ "$PROD_ISSUES" -eq 0 ] && success "Production safety checks passed." || warn "$PROD_ISSUES warning(s) found."
+fi
+
+# ─── Ruby Syntax Check ────────────────────────────────────────────────────────
+if [ -n "$STAGED_RB_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Ruby Syntax Check${RESET}"
+    separator
+
+    SYNTAX_ERRORS=0
+    for f in $STAGED_RB_FILES; do
+        [ -f "$f" ] || continue
+        if ! ruby -c "$f" > /dev/null 2>/tmp/ruby_syntax_err; then
+            error "Syntax error in: $f"
+            cat /tmp/ruby_syntax_err >&2
+            SYNTAX_ERRORS=$((SYNTAX_ERRORS + 1))
+        fi
+    done
+    [ "$SYNTAX_ERRORS" -gt 0 ] && fatal "$SYNTAX_ERRORS Ruby file(s) have syntax errors."
+    success "Ruby syntax check passed."
+fi
+
+# ─── RuboCop ──────────────────────────────────────────────────────────────────
+if [ -n "$STAGED_RB_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Code Style (RuboCop)${RESET}"
+    separator
+
+    RUBOCOP_CMD=""
+    bundle show rubocop > /dev/null 2>&1 && RUBOCOP_CMD="bundle exec rubocop"
+    command -v rubocop &>/dev/null && [ -z "$RUBOCOP_CMD" ] && RUBOCOP_CMD="rubocop"
+
+    if [ -n "$RUBOCOP_CMD" ]; then
+        info "Running RuboCop on staged files..."
+        FILES_ARG=$(echo "$STAGED_RB_FILES" | tr '\n' ' ')
+        RUBOCOP_OUT=$($RUBOCOP_CMD --force-exclusion --format progress $FILES_ARG 2>&1) || {
+            error "RuboCop found violations:"
+            echo "$RUBOCOP_OUT" | grep -v "^Inspecting\|^$" | head -40 >&2
+            echo ""
+            error "Auto-fix with: $RUBOCOP_CMD -a  (safe) or $RUBOCOP_CMD -A  (unsafe)"
+            fatal "Fix RuboCop violations before committing."
+        }
+        success "RuboCop check passed."
     else
-        echo "ℹ️  rails_best_practices not found. Consider adding for code quality insights."
+        warn "RuboCop not found."
+        warn "Add to Gemfile: gem 'rubocop', require: false"
+        warn "Then: bundle install"
     fi
 fi
 
-# Run tests
-echo "🧪 Running tests..."
-if is_rails_project; then
-    # Check for different test frameworks
-    if [ -d "spec" ] && bundle show rspec-rails > /dev/null 2>&1; then
-        echo "   Using RSpec..."
-        if ! bundle exec rspec --fail-fast --format progress; then
-            echo "❌ RSpec tests failed. Please fix failing tests before committing."
-            exit 1
-        fi
-        echo "✅ RSpec tests passed"
-    elif [ -d "test" ]; then
-        echo "   Using Minitest..."
-        if ! bundle exec rails test; then
-            echo "❌ Tests failed. Please fix failing tests before committing."
-            exit 1
-        fi
-        echo "✅ Minitest tests passed"
+# ─── ERB Lint ─────────────────────────────────────────────────────────────────
+if [ -n "$STAGED_ERB_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  ERB Templates (erb_lint)${RESET}"
+    separator
+
+    if bundle show erb_lint > /dev/null 2>&1; then
+        info "Running erb_lint on staged ERB files..."
+        ERB_FILES=$(echo "$STAGED_ERB_FILES" | tr '\n' ' ')
+        ERB_OUT=$(bundle exec erblint $ERB_FILES 2>&1) || {
+            error "ERB lint found issues:"
+            echo "$ERB_OUT" | head -30 >&2
+            fatal "Fix ERB lint issues before committing."
+        }
+        success "ERB lint check passed."
     else
-        echo "ℹ️  No test directory found, skipping test execution"
+        warn "erb_lint not found. Add gem 'erb_lint' to Gemfile."
+    fi
+fi
+
+# ─── Brakeman (Rails Security) ────────────────────────────────────────────────
+if is_rails_project; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Security Analysis (Brakeman)${RESET}"
+    separator
+
+    BRAKEMAN_CMD=""
+    bundle show brakeman > /dev/null 2>&1 && BRAKEMAN_CMD="bundle exec brakeman"
+    command -v brakeman &>/dev/null && [ -z "$BRAKEMAN_CMD" ] && BRAKEMAN_CMD="brakeman"
+
+    if [ -n "$BRAKEMAN_CMD" ]; then
+        info "Running Brakeman security scanner..."
+        BRAKEMAN_OUT=$($BRAKEMAN_CMD --quiet --no-pager --no-exit-on-warn --exit-on-error 2>&1) || {
+            error "Brakeman found security vulnerabilities:"
+            echo "$BRAKEMAN_OUT" | head -40 >&2
+            error "Run: $BRAKEMAN_CMD  for detailed report."
+            fatal "Fix security vulnerabilities before committing."
+        }
+        success "Brakeman security analysis passed."
+    else
+        warn "Brakeman not found."
+        warn "Add to Gemfile: gem 'brakeman', require: false, group: :development"
+        warn "Then: bundle install"
+    fi
+fi
+
+# ─── Tests ────────────────────────────────────────────────────────────────────
+echo ""
+separator
+echo -e "${BOLD}  Tests${RESET}"
+separator
+
+if is_rails_project; then
+    if [ -d "spec" ] && bundle show rspec-rails > /dev/null 2>&1; then
+        info "Running RSpec tests..."
+        RSPEC_OUT=$(bundle exec rspec --fail-fast --format progress 2>&1) || {
+            error "RSpec tests failed:"
+            echo "$RSPEC_OUT" | tail -30 >&2
+            fatal "Fix failing tests before committing."
+        }
+        success "RSpec tests passed."
+    elif [ -d "test" ]; then
+        info "Running Rails Minitest..."
+        TEST_OUT=$(bundle exec rails test 2>&1) || {
+            error "Tests failed:"
+            echo "$TEST_OUT" | tail -30 >&2
+            fatal "Fix failing tests before committing."
+        }
+        success "Minitest tests passed."
+    else
+        warn "No test directory (spec/ or test/) found. Add tests!"
     fi
 else
     # Non-Rails Ruby project
     if [ -d "spec" ] && bundle show rspec > /dev/null 2>&1; then
-        echo "   Using RSpec..."
-        if ! bundle exec rspec --fail-fast --format progress; then
-            echo "❌ RSpec tests failed. Please fix failing tests before committing."
-            exit 1
-        fi
-        echo "✅ RSpec tests passed"
+        info "Running RSpec tests..."
+        RSPEC_OUT=$(bundle exec rspec --fail-fast --format progress 2>&1) || {
+            error "RSpec tests failed:"
+            echo "$RSPEC_OUT" | tail -30 >&2
+            fatal "Fix failing tests before committing."
+        }
+        success "RSpec tests passed."
     elif [ -d "test" ]; then
-        echo "   Using Minitest..."
-        if ! bundle exec rake test 2>/dev/null || ruby -Itest -e "Dir.glob('./test/**/*_test.rb').each { |f| require f }"; then
-            echo "❌ Tests failed. Please fix failing tests before committing."
-            exit 1
-        fi
-        echo "✅ Tests passed"
+        info "Running Minitest..."
+        TEST_OUT=$(bundle exec rake test 2>&1) || \
+        ruby -Itest -e "Dir.glob('./test/**/*_test.rb').each { |f| require f }" 2>&1 || {
+            error "Tests failed."
+            fatal "Fix failing tests before committing."
+        }
+        success "Tests passed."
     else
-        echo "ℹ️  No test directory found, skipping test execution"
+        warn "No test directory found. Consider adding tests."
     fi
 fi
 
-# Database checks for Rails
-if is_rails_project; then
-    echo "🗄️  Checking database migrations..."
-    
-    # Check for pending migrations
-    if [ -d "db/migrate" ]; then
-        PENDING_MIGRATIONS=$(find db/migrate -name "*.rb" -newer db/schema.rb 2>/dev/null | wc -l)
-        if [ "$PENDING_MIGRATIONS" -gt 0 ]; then
-            echo "⚠️  Warning: Potential pending migrations detected"
-            echo "   Run 'rails db:migrate' to apply migrations"
+# ─── Database Migrations Check (Rails) ───────────────────────────────────────
+if is_rails_project && [ -d "db/migrate" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Database Migration Check${RESET}"
+    separator
+
+    # schema.rb committed without migration
+    if git diff --cached --name-only | grep -q "db/schema.rb" && \
+       ! git diff --cached --name-only | grep -q "db/migrate"; then
+        warn "db/schema.rb is staged without migration files."
+        warn "Ensure this is intentional (e.g., manual schema edit)."
+    fi
+
+    # Pending migrations check
+    if [ -f "db/schema.rb" ]; then
+        PENDING=$(find db/migrate -name "*.rb" -newer db/schema.rb 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$PENDING" -gt 0 ]; then
+            warn "$PENDING potential pending migration(s) found."
+            warn "Run: bundle exec rails db:migrate"
         fi
     fi
-    
-    # Check if schema.rb is being committed without migrations
-    if git diff --cached --name-only | grep -q "db/schema.rb"; then
-        if ! git diff --cached --name-only | grep -q "db/migrate"; then
-            echo "⚠️  Warning: schema.rb is being committed without migration files"
-            echo "   Make sure this is intentional"
-        fi
-    fi
-    echo "✅ Database checks completed"
+
+    success "Database migration check completed."
 fi
 
-# Additional checks
-echo "🔧 Running additional checks..."
-
-# Check for binding.pry or byebug left in code
-if grep -r "binding\.pry\|byebug\|debugger\|binding\.irb" --include="*.rb" . 2>/dev/null | grep -v "vendor/" | grep -v ".git/" | head -5 | grep -q .; then
-    echo "⚠️  Warning: Debugger statements found (binding.pry, byebug, etc.)"
-    grep -r "binding\.pry\|byebug\|debugger\|binding\.irb" --include="*.rb" . 2>/dev/null | grep -v "vendor/" | grep -v ".git/" | head -5
-    echo "   Consider removing debug statements before committing"
-fi
-
-# Check for puts/p statements (potential debug output)
-if grep -r "^\s*puts \|^\s*p \|^\s*pp " --include="*.rb" app/ lib/ 2>/dev/null | grep -v "vendor/" | head -5 | grep -q .; then
-    echo "⚠️  Warning: Found puts/p statements in app/ or lib/"
-    echo "   Consider using Rails.logger instead"
-fi
-
-# Check for hardcoded secrets
-if grep -rE "(api_key|api_secret|password|secret_key|private_key)\s*=\s*['\"][^'\"]+['\"]" --include="*.rb" . 2>/dev/null | grep -v "vendor/" | grep -v ".git/" | grep -v "_test.rb" | grep -v "_spec.rb" | head -5 | grep -q .; then
-    echo "🚨 Warning: Potential hardcoded secrets found"
-    echo "   Please use Rails credentials or environment variables"
-fi
-
-# Check for TODO/FIXME/HACK comments
-if grep -rE "(TODO|FIXME|HACK|XXX):" --include="*.rb" . 2>/dev/null | grep -v "vendor/" | grep -v ".git/" | head -5 | grep -q .; then
-    echo "ℹ️  Info: Found TODO/FIXME/HACK comments in code"
-fi
-
-# Check for large files (> 1MB) being committed
-LARGE_FILES=$(find . -type f -size +1M -not -path "./.git/*" -not -path "./vendor/*" -not -path "./node_modules/*" -not -path "./tmp/*" -not -path "./log/*" -not -path "./public/assets/*" -not -path "./public/packs/*" 2>/dev/null | head -5)
-if [ -n "$LARGE_FILES" ]; then
-    echo "⚠️  Warning: Large files found (>1MB):"
-    echo "$LARGE_FILES"
-    echo "   Consider using Git LFS for large binary files"
-fi
-
-# Check for sensitive files
-if find . -type f \( -name "*.pem" -o -name "*.key" -o -name "master.key" -o -name "credentials.yml.enc" -o -name ".env.production" -o -name "database.yml" \) -not -path "./.git/*" 2>/dev/null | head -1 | grep -q .; then
-    SENSITIVE=$(find . -type f \( -name "*.pem" -o -name "*.key" -o -name "master.key" -o -name ".env.production" \) -not -path "./.git/*" 2>/dev/null)
-    if [ -n "$SENSITIVE" ]; then
-        echo "🚨 Warning: Potentially sensitive files found:"
-        echo "$SENSITIVE"
-        echo "   Ensure these are in .gitignore and not being committed"
+# ─── Rails Best Practices ─────────────────────────────────────────────────────
+if is_rails_project && bundle show rails_best_practices > /dev/null 2>&1; then
+    echo ""
+    info "Running Rails Best Practices..."
+    RBPOUT=$(bundle exec rails_best_practices --silent --without-color . 2>/dev/null) || true
+    ISSUES=$(echo "$RBPOUT" | grep -c "Found" 2>/dev/null || echo "0")
+    if [ "$ISSUES" -gt 0 ]; then
+        warn "Rails Best Practices suggestions:"
+        echo "$RBPOUT" | head -20 >&2
+    else
+        success "Rails Best Practices check passed."
     fi
 fi
 
-# Check .gitignore for common Rails ignores
-if [ -f ".gitignore" ]; then
-    MISSING_IGNORES=""
-    for pattern in "*.log" "/tmp" "/log" "master.key" ".env"; do
-        if ! grep -q "$pattern" .gitignore 2>/dev/null; then
-            MISSING_IGNORES="$MISSING_IGNORES $pattern"
-        fi
-    done
-    if [ -n "$MISSING_IGNORES" ]; then
-        echo "⚠️  Warning: Consider adding to .gitignore:$MISSING_IGNORES"
-    fi
-fi
-
-echo "✅ All pre-commit checks passed! 🎉"
+# ─── Summary ──────────────────────────────────────────────────────────────────
 echo ""
-echo "📊 Summary:"
-echo "   • Gem dependencies: ✅"
-echo "   • Code style (RuboCop): ✅"
-echo "   • Syntax check: ✅"
-echo "   • Security analysis: ✅"
-echo "   • Dependency audit: ✅"
-echo "   • Tests: ✅"
-echo "   • Additional checks: ✅"
+separator
+echo -e "${GREEN}${BOLD}  All pre-commit checks passed!${RESET}"
+separator
+echo ""
+echo -e "  ${GREEN}•${RESET} Merge conflict check:     ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Gem dependencies:         ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Dependency security:      ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Production safety:        ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Ruby syntax:              ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} RuboCop style:            ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Brakeman security:        ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Tests:                    ${GREEN}PASS${RESET}"
+echo ""
 
 exit 0

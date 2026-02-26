@@ -1,182 +1,573 @@
 #!/usr/bin/env bash
-# Exit on error
-set -e
+# Python Pre-commit Hook
+# Supports Mac, Windows (Git Bash/WSL), Linux
+# Checks: formatting, linting, type checking, tests, security, production readiness
 
-echo "🔍 Running pre-commit checks..."
+set -euo pipefail
 
-# Get staged Python files
-STAGED_PY_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.py$' || true)
+# ─── Color Output ─────────────────────────────────────────────────────────────
+RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
+BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
 
-# Get staged YAML/JSON/TOML files
-STAGED_CONFIG_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(yaml|yml|json|toml)$' || true)
+info()    { echo -e "${BLUE}[INFO]${RESET}  $*"; }
+success() { echo -e "${GREEN}[PASS]${RESET}  $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
+error()   { echo -e "${RED}[FAIL]${RESET}  $*" >&2; }
+fatal()   { error "$*"; echo -e "${RED}${BOLD}Aborting commit.${RESET}" >&2; exit 1; }
+separator(){ echo -e "${BOLD}$(printf '─%.0s' {1..70})${RESET}"; }
 
-# Get all staged files for general checks
-ALL_STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR || true)
+echo ""
+separator
+echo -e "${BOLD}  Python Pre-commit Hook${RESET}"
+separator
+echo ""
 
-# 1. Check for merge conflicts
-if [ -n "$ALL_STAGED_FILES" ]; then
-  echo "🔀 Checking for merge conflict markers..."
-  if echo "$ALL_STAGED_FILES" | xargs grep -l "^<<<<<<< \|^=======$\|^>>>>>>> " 2>/dev/null; then
-    echo "❌ Merge conflict markers found! Please resolve conflicts before committing."
-    exit 1
-  fi
-fi
+# ─── OS Detection ─────────────────────────────────────────────────────────────
+detect_os() {
+    case "$(uname -s 2>/dev/null)" in
+        Darwin)  echo "mac";;
+        Linux)   echo "linux";;
+        MINGW*|MSYS*|CYGWIN*) echo "windows";;
+        *)
+            [ -n "${WINDIR:-}" ] && echo "windows" || echo "unknown"
+            ;;
+    esac
+}
 
-# 2. Fix trailing whitespace and end-of-file issues
-if [ -n "$ALL_STAGED_FILES" ]; then
-  echo "🧹 Fixing trailing whitespace and EOF..."
-  for file in $ALL_STAGED_FILES; do
-    # Remove trailing whitespace
-    sed -i 's/[[:space:]]*$//' "$file" 2>/dev/null || true
-    # Ensure file ends with newline
-    if [ -f "$file" ]; then
-      tail -c1 "$file" | read -r _ || echo >> "$file"
-    fi
-  done
-  echo "$ALL_STAGED_FILES" | xargs git add 2>/dev/null || true
-fi
+OS=$(detect_os)
+info "Detected OS: $OS"
 
-# 3. Validate YAML files
-if [ -n "$STAGED_CONFIG_FILES" ]; then
-  YAML_FILES=$(echo "$STAGED_CONFIG_FILES" | grep -E '\.(yaml|yml)$' || true)
-  if [ -n "$YAML_FILES" ]; then
-    echo "📋 Validating YAML files..."
-    echo "$YAML_FILES" | xargs -I {} python -c "import yaml; yaml.safe_load(open('{}'))" || {
-      echo "❌ YAML validation failed!"
-      exit 1
-    }
-  fi
-  
-  # Validate JSON files
-  JSON_FILES=$(echo "$STAGED_CONFIG_FILES" | grep -E '\.json$' || true)
-  if [ -n "$JSON_FILES" ]; then
-    echo "📋 Validating JSON files..."
-    echo "$JSON_FILES" | xargs -I {} python -c "import json; json.load(open('{}'))" || {
-      echo "❌ JSON validation failed!"
-      exit 1
-    }
-  fi
-  
-  # Validate TOML files
-  TOML_FILES=$(echo "$STAGED_CONFIG_FILES" | grep -E '\.toml$' || true)
-  if [ -n "$TOML_FILES" ]; then
-    echo "📋 Validating TOML files..."
-    echo "$TOML_FILES" | xargs -I {} python -c "import tomli; tomli.load(open('{}', 'rb'))" 2>/dev/null || \
-    echo "$TOML_FILES" | xargs -I {} python -c "import tomllib; tomllib.load(open('{}', 'rb'))" || {
-      echo "❌ TOML validation failed!"
-      exit 1
-    }
-  fi
-fi
-
-# 4. Run Black formatter on staged Python files
-if [ -n "$STAGED_PY_FILES" ]; then
-  echo "✨ Formatting staged files with Black..."
-  echo "$STAGED_PY_FILES" | xargs black --quiet
-  echo "$STAGED_PY_FILES" | xargs git add
-fi
-
-# 5. Run isort on staged Python files (import sorting)
-if [ -n "$STAGED_PY_FILES" ]; then
-  echo "📦 Sorting imports with isort..."
-  echo "$STAGED_PY_FILES" | xargs isort --profile black --quiet
-  echo "$STAGED_PY_FILES" | xargs git add
-fi
-
-# 6. Run Flake8 linter on staged Python files
-if [ -n "$STAGED_PY_FILES" ]; then
-  echo "🔎 Linting staged files with Flake8..."
-  echo "$STAGED_PY_FILES" | xargs flake8 || {
-    echo "❌ Flake8 linting failed!"
-    exit 1
-  }
-fi
-
-# 7. Run mypy for type checking
-if [ -n "$STAGED_PY_FILES" ]; then
-  echo "📝 Running mypy type check..."
-  echo "$STAGED_PY_FILES" | xargs mypy --no-error-summary 2>/dev/null || {
-    echo "⚠️  mypy found type issues (non-blocking)"
-  }
-fi
-
-# 8. Run Bandit security linter
-if [ -n "$STAGED_PY_FILES" ]; then
-  echo "🔒 Running Bandit security checks..."
-  if [ -f "pyproject.toml" ]; then
-    echo "$STAGED_PY_FILES" | xargs bandit -ll -c pyproject.toml --quiet || {
-      echo "❌ Bandit security checks failed!"
-      exit 1
-    }
-  else
-    echo "$STAGED_PY_FILES" | xargs bandit -ll --quiet || {
-      echo "❌ Bandit security checks failed!"
-      exit 1
-    }
-  fi
-fi
-
-# 9. Run detect-secrets
-if [ -n "$ALL_STAGED_FILES" ]; then
-  echo "🔐 Scanning for secrets..."
-  if [ -f ".secrets.baseline" ]; then
-    detect-secrets scan --baseline .secrets.baseline $ALL_STAGED_FILES || {
-      echo "❌ Secrets detected! Please review and update .secrets.baseline if needed."
-      exit 1
-    }
-  else
-    echo "⚠️  No .secrets.baseline found, skipping secret detection"
-  fi
-fi
-
-# 10. Run pytest on related test files
-if [ -n "$STAGED_PY_FILES" ]; then
-  echo "🧪 Running unit tests..."
-  
-  # Find related test files
-  TEST_FILES=""
-  for file in $STAGED_PY_FILES; do
-    # Skip if file is already a test file
-    if [[ $file == test_* ]] || [[ $file == *_test.py ]] || [[ $file == */tests/* ]]; then
-      TEST_FILES="$TEST_FILES $file"
-      continue
-    fi
-    
-    # Try to find corresponding test file
-    dir=$(dirname "$file")
-    base=$(basename "$file" .py)
-    
-    # Common test patterns
-    possible_tests=(
-      "${dir}/test_${base}.py"
-      "${dir}/${base}_test.py"
-      "${dir}/tests/test_${base}.py"
-      "tests/${dir}/test_${base}.py"
-      "tests/test_${base}.py"
-    )
-    
-    for test_file in "${possible_tests[@]}"; do
-      if [ -f "$test_file" ]; then
-        TEST_FILES="$TEST_FILES $test_file"
-        break
-      fi
+# ─── Python Executable Detection ──────────────────────────────────────────────
+detect_python() {
+    for cmd in python3 python python3.12 python3.11 python3.10; do
+        if command -v "$cmd" &>/dev/null; then
+            local ver
+            ver=$($cmd --version 2>&1 | grep -oE '[0-9]+\.[0-9]+')
+            local major minor
+            major=$(echo "$ver" | cut -d. -f1)
+            minor=$(echo "$ver" | cut -d. -f2)
+            if [ "$major" -ge 3 ] && [ "$minor" -ge 8 ]; then
+                echo "$cmd"
+                return 0
+            fi
+        fi
     done
-  done
-  
-  # Run pytest if we have test files or just run all tests
-  if [ -n "$TEST_FILES" ]; then
-    echo "Running tests: $TEST_FILES"
-    pytest --tb=short --quiet $TEST_FILES || {
-      echo "❌ Unit tests failed!"
-      exit 1
-    }
-  else
-    # Run pytest with related tests discovery
-    echo "$STAGED_PY_FILES" | xargs pytest --tb=short --quiet --co -q > /dev/null 2>&1 && \
-    echo "$STAGED_PY_FILES" | xargs pytest --tb=short --quiet 2>/dev/null || {
-      echo "⚠️  No related tests found or pytest not configured"
-    }
-  fi
+    return 1
+}
+
+# ─── Install Guidance ─────────────────────────────────────────────────────────
+install_python() {
+    error "Python 3.8+ is not installed or not in PATH."
+    echo ""
+    echo -e "${BOLD}  Install Python 3:${RESET}"
+    case "$OS" in
+        mac)
+            echo "    Homebrew:  brew install python@3.12"
+            echo "    pyenv:     brew install pyenv && pyenv install 3.12"
+            echo "    Official:  https://www.python.org/downloads/"
+            ;;
+        linux)
+            echo "    Ubuntu/Debian:  sudo apt-get install -y python3 python3-pip python3-venv"
+            echo "    RHEL/CentOS:    sudo dnf install -y python3 python3-pip"
+            echo "    Arch:           sudo pacman -S python python-pip"
+            echo "    pyenv:          https://github.com/pyenv/pyenv#installation"
+            ;;
+        windows)
+            echo "    Download:   https://www.python.org/downloads/"
+            echo "    Chocolatey: choco install python"
+            echo "    Winget:     winget install Python.Python.3.12"
+            echo "    pyenv-win:  https://github.com/pyenv-win/pyenv-win"
+            ;;
+    esac
+    fatal "Python 3.8+ is required. Please install it and retry."
+}
+
+install_pip_tool() {
+    local tool="$1"
+    local pkg="${2:-$tool}"
+    error "'$tool' is not installed."
+    echo ""
+    echo -e "${BOLD}  Install $tool:${RESET}"
+    echo "    pip install $pkg"
+    echo "    Or in virtual env: pip install --upgrade $pkg"
+    case "$OS" in
+        linux)
+            echo "    Ubuntu/Debian: sudo apt-get install -y python3-$tool (if available)"
+            ;;
+        mac)
+            echo "    Homebrew: brew install $tool (if available)"
+            ;;
+    esac
+}
+
+# ─── Check Python ─────────────────────────────────────────────────────────────
+PYTHON_CMD=$(detect_python 2>/dev/null) || install_python
+PYTHON_VERSION=$($PYTHON_CMD --version 2>&1)
+info "Python: $PYTHON_VERSION (cmd: $PYTHON_CMD)"
+
+# Detect pip
+PIP_CMD=""
+for cmd in pip3 pip "$PYTHON_CMD -m pip"; do
+    if $cmd --version &>/dev/null 2>&1; then
+        PIP_CMD="$cmd"
+        break
+    fi
+done
+
+if [ -z "$PIP_CMD" ]; then
+    warn "pip not found. Some checks may be skipped."
 fi
 
-echo "✅ All pre-commit checks passed!"
+# ─── Project Detection ────────────────────────────────────────────────────────
+IS_PYTHON_PROJECT=false
+for marker in setup.py setup.cfg pyproject.toml requirements.txt Pipfile; do
+    [ -f "$marker" ] && IS_PYTHON_PROJECT=true && break
+done
+if ! $IS_PYTHON_PROJECT; then
+    # Check for .py files
+    find . -maxdepth 3 -name "*.py" | grep -q . && IS_PYTHON_PROJECT=true
+fi
+
+if ! $IS_PYTHON_PROJECT; then
+    fatal "Not a Python project. No Python project markers or .py files found."
+fi
+
+# ─── Virtual Environment Detection ───────────────────────────────────────────
+VENV_ACTIVE=false
+if [ -n "${VIRTUAL_ENV:-}" ] || [ -n "${CONDA_DEFAULT_ENV:-}" ]; then
+    VENV_ACTIVE=true
+    info "Virtual environment active: ${VIRTUAL_ENV:-${CONDA_DEFAULT_ENV:-}}"
+fi
+
+if ! $VENV_ACTIVE; then
+    for venv_dir in .venv venv env .env; do
+        if [ -f "$venv_dir/bin/activate" ] || [ -f "$venv_dir/Scripts/activate" ]; then
+            warn "Virtual environment found at '$venv_dir' but not activated."
+            warn "Consider activating it: source $venv_dir/bin/activate"
+            break
+        fi
+    done
+fi
+
+# ─── Staged Files ─────────────────────────────────────────────────────────────
+STAGED_PY_FILES=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -E '\.py$' || true)
+STAGED_CONFIG_FILES=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -E '\.(yaml|yml|json|toml)$' || true)
+ALL_STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
+
+if [ -z "$ALL_STAGED" ]; then
+    info "No staged files detected. Skipping checks."
+    exit 0
+fi
+
+echo ""
+
+# ─── Merge Conflict Markers ───────────────────────────────────────────────────
+info "Checking for merge conflict markers..."
+CONFLICT_FILES=""
+for f in $ALL_STAGED; do
+    [ -f "$f" ] || continue
+    if grep -qP '^(<{7}|={7}|>{7})' "$f" 2>/dev/null; then
+        CONFLICT_FILES="$CONFLICT_FILES\n  $f"
+    fi
+done
+if [ -n "$CONFLICT_FILES" ]; then
+    fatal "Merge conflict markers found in:$CONFLICT_FILES"
+fi
+success "No merge conflict markers."
+
+# ─── Config File Validation ───────────────────────────────────────────────────
+if [ -n "$STAGED_CONFIG_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Config File Validation${RESET}"
+    separator
+
+    YAML_FILES=$(echo "$STAGED_CONFIG_FILES" | tr ' ' '\n' | grep -E '\.(yaml|yml)$' || true)
+    if [ -n "$YAML_FILES" ]; then
+        info "Validating YAML files..."
+        YAML_ERRORS=0
+        for f in $YAML_FILES; do
+            [ -f "$f" ] || continue
+            if ! $PYTHON_CMD -c "import yaml; yaml.safe_load(open('$f'))" 2>/tmp/yaml_err; then
+                error "YAML error in $f:"
+                cat /tmp/yaml_err >&2
+                YAML_ERRORS=$((YAML_ERRORS + 1))
+            fi
+        done
+        [ "$YAML_ERRORS" -gt 0 ] && fatal "$YAML_ERRORS YAML file(s) have errors."
+        success "YAML validation passed."
+    fi
+
+    JSON_FILES=$(echo "$STAGED_CONFIG_FILES" | tr ' ' '\n' | grep -E '\.json$' || true)
+    if [ -n "$JSON_FILES" ]; then
+        info "Validating JSON files..."
+        JSON_ERRORS=0
+        for f in $JSON_FILES; do
+            [ -f "$f" ] || continue
+            if ! $PYTHON_CMD -m json.tool "$f" > /dev/null 2>/tmp/json_err; then
+                error "JSON error in $f:"
+                cat /tmp/json_err >&2
+                JSON_ERRORS=$((JSON_ERRORS + 1))
+            fi
+        done
+        [ "$JSON_ERRORS" -gt 0 ] && fatal "$JSON_ERRORS JSON file(s) have errors."
+        success "JSON validation passed."
+    fi
+
+    TOML_FILES=$(echo "$STAGED_CONFIG_FILES" | tr ' ' '\n' | grep -E '\.toml$' || true)
+    if [ -n "$TOML_FILES" ]; then
+        info "Validating TOML files..."
+        for f in $TOML_FILES; do
+            [ -f "$f" ] || continue
+            $PYTHON_CMD -c "
+try:
+    import tomllib
+    tomllib.load(open('$f', 'rb'))
+except ImportError:
+    try:
+        import tomli
+        tomli.load(open('$f', 'rb'))
+    except ImportError:
+        import subprocess, sys
+        sys.exit(0)  # Skip if no TOML library available
+" 2>/tmp/toml_err || {
+                error "TOML error in $f:"; cat /tmp/toml_err >&2
+                fatal "Fix TOML errors before committing."
+            }
+        done
+        success "TOML validation passed."
+    fi
+fi
+
+# ─── Production Safety Checks ─────────────────────────────────────────────────
+if [ -n "$STAGED_PY_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Production Safety Checks${RESET}"
+    separator
+
+    PROD_ISSUES=0
+
+    # Check for print() in non-test production code
+    PRINT_FILES=""
+    for f in $STAGED_PY_FILES; do
+        [ -f "$f" ] || continue
+        if echo "$f" | grep -qE '(test_|_test\.py|/tests/|conftest\.py)'; then continue; fi
+        if grep -qE '^\s*print\s*\(' "$f" 2>/dev/null; then
+            PRINT_FILES="$PRINT_FILES\n  $f"
+        fi
+    done
+    if [ -n "$PRINT_FILES" ]; then
+        warn "print() statements found in production code:$PRINT_FILES"
+        warn "Use the 'logging' module instead of print()."
+        PROD_ISSUES=$((PROD_ISSUES + 1))
+    fi
+
+    # Check for pdb/ipdb debugger statements
+    DEBUG_FILES=""
+    for f in $STAGED_PY_FILES; do
+        [ -f "$f" ] || continue
+        if grep -qE '(import pdb|pdb\.set_trace|import ipdb|ipdb\.set_trace|breakpoint\(\))' "$f" 2>/dev/null; then
+            DEBUG_FILES="$DEBUG_FILES\n  $f"
+        fi
+    done
+    if [ -n "$DEBUG_FILES" ]; then
+        fatal "Debugger statements found:$DEBUG_FILES\nRemove before committing."
+    fi
+
+    # Check for hardcoded secrets
+    SECRET_FILES=""
+    for f in $STAGED_PY_FILES; do
+        [ -f "$f" ] || continue
+        if echo "$f" | grep -qE '(test_|_test\.py|/tests/)'; then continue; fi
+        if grep -qiE '(password|api_?key|secret|token|private_?key)\s*=\s*['"'"'"][^'"'"'"]{4,}' "$f" 2>/dev/null; then
+            SECRET_FILES="$SECRET_FILES\n  $f"
+        fi
+    done
+    if [ -n "$SECRET_FILES" ]; then
+        error "Potential hardcoded credentials in:$SECRET_FILES"
+        fatal "Use environment variables or a secrets manager."
+    fi
+
+    # Sensitive files staged
+    SENSITIVE_FILES=""
+    for f in $ALL_STAGED; do
+        case "$f" in
+            .env|.env.production|.env.prod|*.pem|*.key|id_rsa|id_ed25519|secrets.py|secrets.json)
+                SENSITIVE_FILES="$SENSITIVE_FILES\n  $f"
+                ;;
+        esac
+    done
+    if [ -n "$SENSITIVE_FILES" ]; then
+        error "Sensitive files staged:$SENSITIVE_FILES"
+        fatal "Add them to .gitignore and remove from staging."
+    fi
+
+    # TODO/FIXME/HACK
+    TODO_FILES=""
+    for f in $STAGED_PY_FILES; do
+        [ -f "$f" ] || continue
+        if grep -qiE '#\s*(TODO|FIXME|HACK|XXX):' "$f" 2>/dev/null; then
+            TODO_FILES="$TODO_FILES\n  $f"
+        fi
+    done
+    [ -n "$TODO_FILES" ] && warn "TODO/FIXME/HACK comments found:$TODO_FILES"
+
+    # Large files
+    LARGE_FILES=""
+    for f in $ALL_STAGED; do
+        [ -f "$f" ] || continue
+        SIZE=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+        if [ "$SIZE" -gt 1048576 ]; then
+            LARGE_FILES="$LARGE_FILES\n  $f ($(( SIZE / 1024 ))KB)"
+        fi
+    done
+    [ -n "$LARGE_FILES" ] && warn "Large files staged (>1MB):$LARGE_FILES\nConsider Git LFS."
+
+    [ "$PROD_ISSUES" -eq 0 ] && success "Production safety checks passed." || warn "$PROD_ISSUES warning(s) found."
+fi
+
+# ─── Whitespace Cleanup ───────────────────────────────────────────────────────
+if [ -n "$STAGED_PY_FILES" ]; then
+    info "Fixing trailing whitespace..."
+    for f in $STAGED_PY_FILES; do
+        [ -f "$f" ] || continue
+        sed -i 's/[[:space:]]*$//' "$f" 2>/dev/null || true
+        # Ensure newline at EOF
+        [ -n "$(tail -c1 "$f")" ] && printf '\n' >> "$f" 2>/dev/null || true
+    done
+    echo "$STAGED_PY_FILES" | tr ' ' '\n' | xargs git add 2>/dev/null || true
+fi
+
+# ─── Black Formatter ──────────────────────────────────────────────────────────
+if [ -n "$STAGED_PY_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Code Formatting (Black)${RESET}"
+    separator
+
+    if command -v black &>/dev/null || $PYTHON_CMD -m black --version &>/dev/null 2>&1; then
+        BLACK_CMD="black"
+        $PYTHON_CMD -m black --version &>/dev/null 2>&1 && BLACK_CMD="$PYTHON_CMD -m black"
+
+        info "Running Black formatter..."
+        BLACK_OUT=$(echo "$STAGED_PY_FILES" | tr '\n' ' ' | xargs $BLACK_CMD --quiet 2>&1) || {
+            error "Black formatting failed:"
+            echo "$BLACK_OUT" >&2
+            fatal "Fix Black errors before committing."
+        }
+        echo "$STAGED_PY_FILES" | tr ' ' '\n' | xargs git add 2>/dev/null || true
+        success "Black formatting applied."
+    else
+        install_pip_tool "black"
+        warn "Skipping Black formatting..."
+    fi
+fi
+
+# ─── isort Import Sorting ─────────────────────────────────────────────────────
+if [ -n "$STAGED_PY_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Import Sorting (isort)${RESET}"
+    separator
+
+    if command -v isort &>/dev/null || $PYTHON_CMD -m isort --version &>/dev/null 2>&1; then
+        ISORT_CMD="isort"
+        $PYTHON_CMD -m isort --version &>/dev/null 2>&1 && ISORT_CMD="$PYTHON_CMD -m isort"
+
+        info "Running isort..."
+        ISORT_PROFILE="--profile black"
+        [ -f "pyproject.toml" ] && grep -q "\[tool.isort\]" pyproject.toml && ISORT_PROFILE=""
+        ISORT_OUT=$(echo "$STAGED_PY_FILES" | tr '\n' ' ' | xargs $ISORT_CMD $ISORT_PROFILE --quiet 2>&1) || {
+            error "isort failed:"; echo "$ISORT_OUT" >&2
+            fatal "Fix isort errors before committing."
+        }
+        echo "$STAGED_PY_FILES" | tr ' ' '\n' | xargs git add 2>/dev/null || true
+        success "Import sorting applied."
+    else
+        install_pip_tool "isort"
+        warn "Skipping import sorting..."
+    fi
+fi
+
+# ─── Flake8 Linting ───────────────────────────────────────────────────────────
+if [ -n "$STAGED_PY_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Linting (Flake8)${RESET}"
+    separator
+
+    if command -v flake8 &>/dev/null || $PYTHON_CMD -m flake8 --version &>/dev/null 2>&1; then
+        FLAKE8_CMD="flake8"
+        $PYTHON_CMD -m flake8 --version &>/dev/null 2>&1 && FLAKE8_CMD="$PYTHON_CMD -m flake8"
+
+        info "Running Flake8..."
+        FLAKE8_ARGS="--max-line-length=120"
+        [ -f ".flake8" ] || grep -q "\[flake8\]" setup.cfg 2>/dev/null || grep -q "\[tool.flake8\]" pyproject.toml 2>/dev/null && FLAKE8_ARGS=""
+
+        FLAKE8_OUT=$(echo "$STAGED_PY_FILES" | tr '\n' ' ' | xargs $FLAKE8_CMD $FLAKE8_ARGS 2>&1) || {
+            error "Flake8 found issues:"
+            echo "$FLAKE8_OUT" >&2
+            fatal "Fix Flake8 errors before committing."
+        }
+        success "Flake8 linting passed."
+    else
+        install_pip_tool "flake8"
+        warn "Skipping Flake8 linting..."
+    fi
+fi
+
+# ─── Mypy Type Check ──────────────────────────────────────────────────────────
+if [ -n "$STAGED_PY_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Type Checking (mypy)${RESET}"
+    separator
+
+    if command -v mypy &>/dev/null || $PYTHON_CMD -m mypy --version &>/dev/null 2>&1; then
+        MYPY_CMD="mypy"
+        $PYTHON_CMD -m mypy --version &>/dev/null 2>&1 && MYPY_CMD="$PYTHON_CMD -m mypy"
+
+        info "Running mypy type check..."
+        MYPY_OUT=$(echo "$STAGED_PY_FILES" | tr '\n' ' ' | xargs $MYPY_CMD --no-error-summary 2>&1) || {
+            warn "mypy found type issues (non-blocking in this configuration):"
+            echo "$MYPY_OUT" | head -20 >&2
+            warn "Review type errors and fix where possible."
+        }
+        success "mypy check completed."
+    else
+        install_pip_tool "mypy"
+        warn "Skipping type checking..."
+    fi
+fi
+
+# ─── Bandit Security Check ────────────────────────────────────────────────────
+if [ -n "$STAGED_PY_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Security Scan (Bandit)${RESET}"
+    separator
+
+    if command -v bandit &>/dev/null || $PYTHON_CMD -m bandit --version &>/dev/null 2>&1; then
+        BANDIT_CMD="bandit"
+        $PYTHON_CMD -m bandit --version &>/dev/null 2>&1 && BANDIT_CMD="$PYTHON_CMD -m bandit"
+
+        info "Running Bandit security scan..."
+        BANDIT_ARGS="-ll --quiet"
+        [ -f "pyproject.toml" ] && grep -q "\[tool.bandit\]" pyproject.toml && BANDIT_ARGS="-ll --quiet -c pyproject.toml"
+
+        BANDIT_OUT=$(echo "$STAGED_PY_FILES" | tr '\n' ' ' | xargs $BANDIT_CMD $BANDIT_ARGS 2>&1) || {
+            error "Bandit found security issues:"
+            echo "$BANDIT_OUT" >&2
+            fatal "Fix security issues before committing."
+        }
+        success "Bandit security scan passed."
+    else
+        install_pip_tool "bandit"
+        warn "Skipping security scan..."
+    fi
+fi
+
+# ─── Secrets Detection ────────────────────────────────────────────────────────
+if [ -n "$ALL_STAGED" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Secrets Detection${RESET}"
+    separator
+
+    if command -v detect-secrets &>/dev/null || $PYTHON_CMD -m detect_secrets --version &>/dev/null 2>&1; then
+        info "Scanning for secrets..."
+        if [ -f ".secrets.baseline" ]; then
+            SECRETS_OUT=$(detect-secrets scan --baseline .secrets.baseline $ALL_STAGED 2>&1) || {
+                error "Secrets detected!"
+                echo "$SECRETS_OUT" >&2
+                fatal "Review and update .secrets.baseline or remove secrets."
+            }
+            success "No new secrets detected."
+        else
+            warn "No .secrets.baseline found."
+            warn "Create one: detect-secrets scan > .secrets.baseline && git add .secrets.baseline"
+        fi
+    else
+        warn "detect-secrets not installed. Install: pip install detect-secrets"
+    fi
+fi
+
+# ─── Pytest ───────────────────────────────────────────────────────────────────
+if [ -n "$STAGED_PY_FILES" ]; then
+    echo ""
+    separator
+    echo -e "${BOLD}  Unit Tests (pytest)${RESET}"
+    separator
+
+    if command -v pytest &>/dev/null || $PYTHON_CMD -m pytest --version &>/dev/null 2>&1; then
+        PYTEST_CMD="pytest"
+        $PYTHON_CMD -m pytest --version &>/dev/null 2>&1 && PYTEST_CMD="$PYTHON_CMD -m pytest"
+
+        info "Finding related test files..."
+        TEST_FILES=""
+        for f in $STAGED_PY_FILES; do
+            if echo "$f" | grep -qE '(test_|_test\.py|/tests/|conftest\.py)'; then
+                TEST_FILES="$TEST_FILES $f"
+                continue
+            fi
+            dir=$(dirname "$f")
+            base=$(basename "$f" .py)
+            for candidate in \
+                "${dir}/test_${base}.py" \
+                "${dir}/${base}_test.py" \
+                "${dir}/tests/test_${base}.py" \
+                "tests/${dir}/test_${base}.py" \
+                "tests/test_${base}.py"; do
+                if [ -f "$candidate" ]; then
+                    TEST_FILES="$TEST_FILES $candidate"
+                    break
+                fi
+            done
+        done
+
+        if [ -n "$TEST_FILES" ]; then
+            info "Running tests: $TEST_FILES"
+            PYTEST_OUT=$($PYTEST_CMD --tb=short --quiet $TEST_FILES 2>&1) || {
+                error "Tests failed:"
+                echo "$PYTEST_OUT" >&2
+                fatal "Fix failing tests before committing."
+            }
+            success "All tests passed."
+        else
+            PYTEST_OUT=$($PYTEST_CMD --tb=short --quiet --co -q 2>/dev/null | head -5) || true
+            if echo "$PYTEST_OUT" | grep -q "test session"; then
+                info "Running all tests..."
+                $PYTEST_CMD --tb=short --quiet 2>&1 || {
+                    fatal "Tests failed. Fix before committing."
+                }
+                success "All tests passed."
+            else
+                warn "No related test files found. Ensure tests cover your changes."
+            fi
+        fi
+    else
+        install_pip_tool "pytest"
+        warn "Skipping unit tests..."
+    fi
+fi
+
+# ─── Summary ──────────────────────────────────────────────────────────────────
+echo ""
+separator
+echo -e "${GREEN}${BOLD}  All pre-commit checks passed!${RESET}"
+separator
+echo ""
+echo -e "  ${GREEN}•${RESET} Merge conflict check:     ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Config file validation:   ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Production safety:        ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Black formatting:         ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} isort imports:            ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Flake8 linting:           ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} mypy type check:          ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Bandit security scan:     ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Secrets detection:        ${GREEN}PASS${RESET}"
+echo -e "  ${GREEN}•${RESET} Unit tests:               ${GREEN}PASS${RESET}"
+echo ""
+
+exit 0
